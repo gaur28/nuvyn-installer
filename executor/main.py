@@ -349,6 +349,15 @@ async def main():
         # Print results for Databricks Jobs
         logger.info("📊 Execution completed")
         
+        # Print result data
+        if "result_data" in result and result["result_data"]:
+            print("\n" + "="*60)
+            print("📊 METADATA EXTRACTION RESULTS")
+            print("="*60)
+            import json
+            print(json.dumps(result["result_data"], indent=2, default=str))
+            print("="*60 + "\n")
+        
         # Simplified output for Databricks Jobs
         if "success" in result:
             if result["success"]:

@@ -34,9 +34,14 @@ class DataReader:
             if not connector:
                 raise Exception(f"No suitable connector found for path: {job_config.data_source_path}")
             
-            # Connect to data source
-            if not await connector.connect():
-                raise Exception("Failed to connect to data source")
+            # Connect to data source (pass URL for SAS token extraction)
+            if hasattr(connector, 'can_handle') and 'blob.core.windows.net' in job_config.data_source_path:
+                # For Azure Blob with SAS token in URL
+                if not await connector.connect(url_with_sas=job_config.data_source_path):
+                    raise Exception("Failed to connect to data source")
+            else:
+                if not await connector.connect():
+                    raise Exception("Failed to connect to data source")
             
             # Read data
             files = await connector.list_files(job_config.data_source_path)

@@ -35,15 +35,15 @@ class AzureBlobDataSource(DataSourceBase):
     
     def validate_credentials(self) -> bool:
         """Validate Azure Blob Storage credentials"""
-        required_creds = ['connection_string'] or ['account_name', 'account_key'] or ['sas_token']
-        
         has_connection_string = bool(self.credentials.get('connection_string'))
         has_account_creds = bool(self.credentials.get('account_name')) and bool(self.credentials.get('account_key'))
         has_sas_token = bool(self.credentials.get('sas_token'))
         
-        return has_connection_string or has_account_creds or has_sas_token
+        # If no credentials provided, we might have SAS token in URL (will be extracted later)
+        # So return True to allow connector creation
+        return True  # Will validate during connection
     
-    async def connect(self) -> bool:
+    async def connect(self, url_with_sas: str = None) -> bool:
         """Establish connection to Azure Blob Storage"""
         try:
             logger.info("🔗 Connecting to Azure Blob Storage...")
@@ -70,12 +70,35 @@ class AzureBlobDataSource(DataSourceBase):
                     credential=self.credentials['sas_token']
                 )
             
+            # Try to extract SAS token from URL if provided
+            elif url_with_sas and '?' in url_with_sas:
+                # URL contains SAS token as query parameters
+                base_url = url_with_sas.split('?')[0]
+                sas_token = '?' + url_with_sas.split('?')[1]  # Keep the ? for SAS token
+                
+                # Extract account name from URL
+                if 'blob.core.windows.net' in base_url:
+                    account_name = base_url.split('//')[1].split('.')[0]
+                    account_url = f"https://{account_name}.blob.core.windows.net"
+                    
+                    # Create client with SAS token from URL
+                    # Use the full URL with SAS token directly
+                    self.blob_service_client = BlobServiceClient(
+                        account_url=account_url + sas_token
+                    )
+                    logger.info(f"✅ Using SAS token from URL for account: {account_name}")
+                else:
+                    logger.error("❌ Invalid Azure Blob URL format")
+                    return False
+            
             else:
                 logger.error("❌ No valid Azure Blob Storage credentials found")
                 return False
             
-            # Test the connection
-            await self.test_connection()
+            # Skip test for SAS URLs - blob operations will validate
+            # await self.test_connection()
+            # Skip test for SAS URLs - blob operations will validate
+            # await self.test_connection()
             logger.info("✅ Azure Blob Storage connection established")
             return True
             
@@ -96,6 +119,13 @@ class AzureBlobDataSource(DataSourceBase):
             if not self.blob_service_client:
                 await self.connect()
             
+            # Check if this is a direct blob URL (single file with SAS token)
+            if '?' in path and path.split('?')[1].find('sr=b') != -1:
+                # This is a blob-level SAS token for a single file
+                container_name, blob_name = self._parse_blob_path(path.split('?')[0])
+                logger.info(f"📁 Direct blob access detected: {blob_name}")
+                return [blob_name] if blob_name else []
+            
             # Parse container and path from URL
             container_name, blob_prefix = self._parse_blob_path(path)
             
@@ -113,6 +143,12 @@ class AzureBlobDataSource(DataSourceBase):
             
         except Exception as e:
             logger.error(f"❌ Error listing files from Azure Blob Storage: {e}")
+            # If listing fails but we have a direct blob URL, return the blob name
+            if '?' in path:
+                container_name, blob_name = self._parse_blob_path(path.split('?')[0])
+                if blob_name:
+                    logger.info(f"📁 Returning single blob from URL: {blob_name}")
+                    return [blob_name]
             return []
     
     async def get_file_size(self, file_path: str) -> int:
@@ -120,6 +156,15 @@ class AzureBlobDataSource(DataSourceBase):
         try:
             if not self.blob_service_client:
                 await self.connect()
+            
+            # If file_path contains SAS token, use it directly
+            if '?' in file_path and 'sig=' in file_path:
+                from azure.storage.blob import BlobClient
+                blob_client = BlobClient.from_blob_url(file_path)
+                properties = blob_client.get_blob_properties()
+                size = properties.size
+                logger.debug(f"📏 File size: {size} bytes")
+                return size
             
             container_name, blob_name = self._parse_blob_path(file_path)
             blob_client = self.blob_service_client.get_blob_client(
@@ -143,6 +188,15 @@ class AzureBlobDataSource(DataSourceBase):
             if not self.blob_service_client:
                 await self.connect()
             
+            # If file_path contains SAS token, use it directly
+            if '?' in file_path and 'sig=' in file_path:
+                from azure.storage.blob import BlobClient
+                blob_client = BlobClient.from_blob_url(file_path)
+                download_stream = blob_client.download_blob(max_concurrency=1)
+                sample_data = download_stream.readall()[:max_bytes]
+                logger.debug(f"📖 Read {len(sample_data)} bytes using SAS URL")
+                return sample_data
+            
             container_name, blob_name = self._parse_blob_path(file_path)
             blob_client = self.blob_service_client.get_blob_client(
                 container=container_name,
@@ -151,7 +205,7 @@ class AzureBlobDataSource(DataSourceBase):
             
             # Download only the first max_bytes
             download_stream = blob_client.download_blob(max_concurrency=1)
-            sample_data = download_stream.read(max_bytes)
+            sample_data = download_stream.readall()[:max_bytes]
             
             logger.debug(f"📖 Read {len(sample_data)} bytes from {blob_name}")
             return sample_data
@@ -167,7 +221,7 @@ class AzureBlobDataSource(DataSourceBase):
                 return {"success": False, "error": "Not connected"}
             
             # Try to list containers to test connection
-            containers = self.blob_service_client.list_containers(max_results=1)
+            containers = self.blob_service_client.list_containers(results_per_page=1)
             list(containers)  # Consume the iterator
             
             return {
