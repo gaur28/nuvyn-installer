@@ -9,6 +9,7 @@ import os
 import asyncio
 import argparse
 import json
+from typing import Dict, Any
 from datetime import datetime, timezone
 
 # Add executor directory to path
@@ -66,7 +67,8 @@ async def create_and_execute_job(job_type: str,
                                 data_source_path: str,
                                 data_source_type: str = "auto",
                                 tenant_id: str = "default",
-                                config_manager: ConfigManager = None) -> dict:
+                                config_manager: ConfigManager = None,
+                                job_metadata: Dict[str, Any] = None) -> dict:
     """Create a new job and execute it"""
     logger.info(f"🆕 Creating new job: {job_type} for {data_source_path}")
     
@@ -83,7 +85,8 @@ async def create_and_execute_job(job_type: str,
             job_type=JobType(job_type),
             data_source_path=data_source_path,
             data_source_type=data_source_type,
-            tenant_id=tenant_id
+            tenant_id=tenant_id,
+            job_metadata=job_metadata or {}
         )
         
         logger.info(f"📋 Job created: {job_id}")
@@ -216,7 +219,7 @@ def print_usage():
     Nuvyn Executor Script - Databricks Jobs Integration
 
     Usage:
-        python main.py <job_type> [data_source_path] [source_type] [tenant_id]
+        python main.py <job_type> [data_source_path] [source_type] [tenant_id] [--write-to-db]
 
     Job Types:
         metadata_extraction                 Extract metadata from data sources
@@ -226,8 +229,12 @@ def print_usage():
         api_transmission                    Send results to backend API
         full_pipeline                       Execute complete pipeline
 
+    Flags:
+        --write-to-db                      Write metadata to Databricks SQL tables
+    
     Examples:
         python main.py metadata_extraction /path/to/data csv default
+        python main.py metadata_extraction /path/to/data csv default --write-to-db
         python main.py schema_validation
         python main.py full_pipeline /Volumes/data/sales parquet tenant123
 
@@ -236,6 +243,12 @@ def print_usage():
         NUVYN_API_ENDPOINT                 Backend API endpoint
         NUVYN_API_KEY                      API authentication key
         EXECUTOR_LOG_LEVEL                 Log level (DEBUG, INFO, WARNING, ERROR)
+        
+        # For --write-to-db flag:
+        DATABRICKS_SERVER_HOSTNAME         Databricks SQL Warehouse hostname
+        DATABRICKS_HTTP_PATH               Databricks SQL Warehouse HTTP path
+        DATABRICKS_ACCESS_TOKEN            Databricks access token
+        EXECUTOR_WRITE_TO_DB               Set to 'true' to enable DB writing
     """)
 
 
@@ -265,10 +278,35 @@ async def main():
         data_source_type = sys.argv[3] if len(sys.argv) > 3 else "auto"
         tenant_id = sys.argv[4] if len(sys.argv) > 4 else "default"
         
+        # Check for --write-to-db flag
+        write_to_db = "--write-to-db" in sys.argv or os.getenv("EXECUTOR_WRITE_TO_DB", "false").lower() == "true"
+        
+        # Databricks SQL connection parameters (from environment)
+        db_server_hostname = os.getenv("DATABRICKS_SERVER_HOSTNAME", "")
+        db_http_path = os.getenv("DATABRICKS_HTTP_PATH", "")
+        db_access_token = os.getenv("DATABRICKS_ACCESS_TOKEN", "")
+        
         logger.info(f"📋 Job Type: {job_type}")
         logger.info(f"📁 Data Source: {data_source_path}")
         logger.info(f"🔍 Source Type: {data_source_type}")
         logger.info(f"🏢 Tenant ID: {tenant_id}")
+        logger.info(f"💾 Write to DB: {write_to_db}")
+        
+        # Initialize Databricks writer if write-to-db is enabled
+        db_writer = None
+        if write_to_db:
+            if db_server_hostname and db_http_path and db_access_token:
+                from storage.databricks_writer import DatabricksWriter
+                db_writer = DatabricksWriter(db_server_hostname, db_http_path, db_access_token)
+                if db_writer.connect():
+                    db_writer.create_schema_and_tables()
+                    logger.info("✅ Databricks SQL writer initialized")
+                else:
+                    logger.error("❌ Failed to initialize Databricks SQL writer")
+                    db_writer = None
+            else:
+                logger.warning("⚠️ --write-to-db flag set but Databricks SQL credentials not provided")
+                logger.warning("   Set: DATABRICKS_SERVER_HOSTNAME, DATABRICKS_HTTP_PATH, DATABRICKS_ACCESS_TOKEN")
         
         # Execute based on job type
         if job_type == "metadata_extraction":
@@ -276,12 +314,18 @@ async def main():
                 logger.error("❌ Error: Data source path required for metadata extraction")
                 sys.exit(1)
             
+            # Pass db_writer in job_metadata if available
+            job_metadata = {}
+            if db_writer:
+                job_metadata['db_writer'] = db_writer
+            
             result = await create_and_execute_job(
                 job_type="metadata_extraction",
                 data_source_path=data_source_path,
                 data_source_type=data_source_type,
                 tenant_id=tenant_id,
-                config_manager=config_manager
+                config_manager=config_manager,
+                job_metadata=job_metadata
             )
             
         elif job_type == "schema_validation":

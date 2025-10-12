@@ -139,6 +139,12 @@ class JobManager:
             if job_config.job_type == JobType.METADATA_EXTRACTION:
                 from metadata.extractor import MetadataExtractor
                 executor = MetadataExtractor(self.config_manager)
+                
+                # Check if db_writer is provided in job_metadata
+                if 'db_writer' in job_config.job_metadata:
+                    executor.write_to_db = True
+                    executor.db_writer = job_config.job_metadata['db_writer']
+                
                 result_data = await executor.extract_metadata(job_config)
                 
             elif job_config.job_type == JobType.SCHEMA_VALIDATION:

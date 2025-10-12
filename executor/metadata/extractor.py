@@ -16,6 +16,8 @@ class MetadataExtractor:
     
     def __init__(self, config_manager: ConfigManager):
         self.config_manager = config_manager
+        self.write_to_db = False
+        self.db_writer = None
     
     async def extract_metadata(self, job_config: JobConfig) -> Dict[str, Any]:
         """Extract comprehensive metadata from data source"""
@@ -104,6 +106,22 @@ class MetadataExtractor:
                     logger.warning(f"Failed to analyze file {file_path}: {e}")
             
             await connector.disconnect()
+            
+            # Write to database if enabled
+            if self.write_to_db and self.db_writer:
+                try:
+                    logger.info("💾 Writing metadata to Databricks SQL...")
+                    if self.db_writer.write_metadata(metadata):
+                        metadata['written_to_db'] = True
+                        metadata['db_source_id'] = metadata.get('db_source_id', 'unknown')
+                        logger.info("✅ Metadata written to database successfully")
+                    else:
+                        metadata['written_to_db'] = False
+                        logger.warning("⚠️ Failed to write metadata to database")
+                except Exception as e:
+                    logger.error(f"❌ Database write failed: {e}")
+                    metadata['written_to_db'] = False
+                    metadata['db_error'] = str(e)
             
             logger.info(f"✅ Metadata extraction completed: {len(files)} files analyzed")
             return metadata
