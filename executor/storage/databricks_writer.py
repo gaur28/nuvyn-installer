@@ -56,9 +56,17 @@ class DatabricksWriter:
             
             cursor = self.connection.cursor()
             
-            # Create schema
-            cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {self.schema_name}")
-            logger.info(f"✅ Schema created: {self.schema_name}")
+            # Set catalog context (use hive_metastore for compatibility)
+            logger.info("Setting catalog context to hive_metastore...")
+            cursor.execute("USE CATALOG hive_metastore")
+            
+            # Create schema in hive_metastore catalog
+            logger.info(f"Creating schema in hive_metastore catalog...")
+            cursor.execute(f"CREATE SCHEMA IF NOT EXISTS hive_metastore.{self.schema_name}")
+            logger.info(f"✅ Schema created: hive_metastore.{self.schema_name}")
+            
+            # Switch to the schema
+            cursor.execute(f"USE SCHEMA {self.schema_name}")
             
             # Create sources table
             cursor.execute(f"""
@@ -101,8 +109,35 @@ class DatabricksWriter:
             """)
             logger.info(f"✅ Table created: {self.schema_name}.columns")
             
+            # Create executor_runs table
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS {self.schema_name}.executor_runs (
+                    run_id STRING,
+                    executor_version STRING,
+                    source_id STRING,
+                    run_mode STRING,
+                    status STRING,
+                    error_message STRING,
+                    started_at TIMESTAMP,
+                    finished_at TIMESTAMP
+                )
+            """)
+            logger.info(f"✅ Table created: {self.schema_name}.executor_runs")
+            
+            # Create logs table
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS {self.schema_name}.logs (
+                    log_id STRING,
+                    run_id STRING,
+                    log_level STRING,
+                    log_message STRING,
+                    log_timestamp TIMESTAMP
+                )
+            """)
+            logger.info(f"✅ Table created: {self.schema_name}.logs")
+            
             cursor.close()
-            logger.info(f"✅ Schema and tables created successfully")
+            logger.info(f"✅ Schema and all tables created successfully")
             return True
             
         except Exception as e:
@@ -148,7 +183,7 @@ class DatabricksWriter:
             extraction_timestamp = datetime.now(timezone.utc)
             
             cursor.execute(f"""
-                INSERT INTO {self.schema_name}.sources
+                INSERT INTO hive_metastore.{self.schema_name}.sources
                 (source_id, source_path, source_type, extraction_timestamp, files_found, total_size_bytes)
                 VALUES (?, ?, ?, ?, ?, ?)
             """, (
@@ -173,7 +208,7 @@ class DatabricksWriter:
             cursor = self.connection.cursor()
             
             cursor.execute(f"""
-                INSERT INTO {self.schema_name}.tables
+                INSERT INTO hive_metastore.{self.schema_name}.tables
                 (source_id, table_name, file_path, file_type, row_count, column_count, size_bytes)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (
@@ -202,7 +237,7 @@ class DatabricksWriter:
             sample_values = str(column.get('sample_values', []))
             
             cursor.execute(f"""
-                INSERT INTO {self.schema_name}.columns
+                INSERT INTO hive_metastore.{self.schema_name}.columns
                 (source_id, table_name, column_name, data_type, position, is_nullable, sample_values)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (
@@ -230,13 +265,13 @@ class DatabricksWriter:
             if source_id:
                 # Query specific source
                 cursor.execute(f"""
-                    SELECT * FROM {self.schema_name}.sources
+                    SELECT * FROM hive_metastore.{self.schema_name}.sources
                     WHERE source_id = ?
                 """, (source_id,))
             else:
                 # Query all sources
                 cursor.execute(f"""
-                    SELECT * FROM {self.schema_name}.sources
+                    SELECT * FROM hive_metastore.{self.schema_name}.sources
                     ORDER BY extraction_timestamp DESC
                     LIMIT 10
                 """)
@@ -256,15 +291,15 @@ class DatabricksWriter:
             cursor = self.connection.cursor()
             
             # Count sources
-            cursor.execute(f"SELECT COUNT(*) FROM {self.schema_name}.sources")
+            cursor.execute(f"SELECT COUNT(*) FROM hive_metastore.{self.schema_name}.sources")
             source_count = cursor.fetchone()[0]
             
             # Count tables
-            cursor.execute(f"SELECT COUNT(*) FROM {self.schema_name}.tables")
+            cursor.execute(f"SELECT COUNT(*) FROM hive_metastore.{self.schema_name}.tables")
             table_count = cursor.fetchone()[0]
             
             # Count columns
-            cursor.execute(f"SELECT COUNT(*) FROM {self.schema_name}.columns")
+            cursor.execute(f"SELECT COUNT(*) FROM hive_metastore.{self.schema_name}.columns")
             column_count = cursor.fetchone()[0]
             
             cursor.close()
