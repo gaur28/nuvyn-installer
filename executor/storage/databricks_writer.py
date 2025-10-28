@@ -68,9 +68,10 @@ class DatabricksWriter:
             # Switch to the schema
             cursor.execute(f"USE SCHEMA {self.schema_name}")
             
-            # Create sources table
+            # Create sources table (id is auto-increment PK, source_id is backend-provided, non-unique)
             cursor.execute(f"""
                 CREATE TABLE IF NOT EXISTS {self.schema_name}.sources (
+                    id BIGINT GENERATED ALWAYS AS IDENTITY,
                     source_id STRING,
                     source_path STRING,
                     source_type STRING,
@@ -84,6 +85,7 @@ class DatabricksWriter:
             # Create tables table
             cursor.execute(f"""
                 CREATE TABLE IF NOT EXISTS {self.schema_name}.tables (
+                    id BIGINT GENERATED ALWAYS AS IDENTITY,
                     source_id STRING,
                     table_name STRING,
                     file_path STRING,
@@ -98,6 +100,7 @@ class DatabricksWriter:
             # Create columns table
             cursor.execute(f"""
                 CREATE TABLE IF NOT EXISTS {self.schema_name}.columns (
+                    id BIGINT GENERATED ALWAYS AS IDENTITY,
                     source_id STRING,
                     table_name STRING,
                     column_name STRING,
@@ -112,6 +115,7 @@ class DatabricksWriter:
             # Create executor_runs table
             cursor.execute(f"""
                 CREATE TABLE IF NOT EXISTS {self.schema_name}.executor_runs (
+                    id BIGINT GENERATED ALWAYS AS IDENTITY,
                     run_id STRING,
                     executor_version STRING,
                     source_id STRING,
@@ -127,6 +131,7 @@ class DatabricksWriter:
             # Create logs table
             cursor.execute(f"""
                 CREATE TABLE IF NOT EXISTS {self.schema_name}.logs (
+                    id BIGINT GENERATED ALWAYS AS IDENTITY,
                     log_id STRING,
                     run_id STRING,
                     log_level STRING,
@@ -144,13 +149,22 @@ class DatabricksWriter:
             logger.error(f"❌ Failed to create schema and tables: {e}")
             return False
     
-    def write_metadata(self, metadata: Dict[str, Any]) -> bool:
-        """Write extracted metadata to Databricks SQL tables"""
+    def write_metadata(self, metadata: Dict[str, Any], source_id: str = None) -> bool:
+        """Write extracted metadata to Databricks SQL tables
+        
+        Args:
+            metadata: Metadata dict
+            source_id: Optional backend-provided source_id (non-unique). If None, generate one.
+        """
         try:
             logger.info("💾 Writing metadata to Databricks SQL...")
             
-            # Generate source_id
-            source_id = str(uuid.uuid4())
+            # Use provided source_id or generate one
+            if not source_id:
+                source_id = str(uuid.uuid4())
+                logger.info(f"Generated new source_id: {source_id}")
+            else:
+                logger.info(f"Using provided source_id: {source_id}")
             
             # Write to sources table
             self._write_source(source_id, metadata)
@@ -165,7 +179,7 @@ class DatabricksWriter:
                         self._write_column(source_id, file_info['name'], column)
             
             # Store source_id in metadata for reference
-            metadata['db_source_id'] = source_id
+            metadata['source_id'] = source_id
             
             logger.info(f"✅ Metadata written successfully (source_id: {source_id})")
             return True

@@ -111,9 +111,11 @@ class MetadataExtractor:
             if self.write_to_db and self.db_writer:
                 try:
                     logger.info("💾 Writing metadata to Databricks SQL...")
-                    if self.db_writer.write_metadata(metadata):
+                    # Use backend-provided source_id if available
+                    backend_source_id = job_config.job_metadata.get('source_id') if job_config.job_metadata else None
+                    if self.db_writer.write_metadata(metadata, source_id=backend_source_id):
                         metadata['written_to_db'] = True
-                        metadata['db_source_id'] = metadata.get('db_source_id', 'unknown')
+                        metadata['source_id'] = backend_source_id
                         logger.info("✅ Metadata written to database successfully")
                     else:
                         metadata['written_to_db'] = False
