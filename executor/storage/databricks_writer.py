@@ -2,7 +2,6 @@
 Databricks SQL Writer for storing metadata in _executor_metadata schema
 """
 
-import uuid
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 from databricks import sql
@@ -154,17 +153,18 @@ class DatabricksWriter:
         
         Args:
             metadata: Metadata dict
-            source_id: Optional backend-provided source_id (non-unique). If None, generate one.
+            source_id: Required backend-provided source_id (non-unique). Must be provided by backend.
         """
         try:
             logger.info("💾 Writing metadata to Databricks SQL...")
             
-            # Use provided source_id or generate one
+            # source_id must be provided by backend - do not auto-generate
             if not source_id:
-                source_id = str(uuid.uuid4())
-                logger.info(f"Generated new source_id: {source_id}")
-            else:
-                logger.info(f"Using provided source_id: {source_id}")
+                error_msg = "source_id is required and must be provided by the backend server"
+                logger.error(f"❌ {error_msg}")
+                raise ValueError(error_msg)
+            
+            logger.info(f"Using backend-provided source_id: {source_id}")
             
             # Write to sources table
             self._write_source(source_id, metadata)

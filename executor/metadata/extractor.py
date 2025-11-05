@@ -111,12 +111,20 @@ class MetadataExtractor:
             if self.write_to_db and self.db_writer:
                 try:
                     logger.info("💾 Writing metadata to Databricks SQL...")
-                    # Use backend-provided source_id if available
-                    backend_source_id = job_config.job_metadata.get('source_id') if job_config.job_metadata else None
+                    # Get backend-provided source_id - must be provided by backend
+                    backend_source_id = None
+                    if job_config.job_metadata:
+                        backend_source_id = job_config.job_metadata.get('source_id')
+                    
+                    if not backend_source_id:
+                        error_msg = "source_id is required and must be provided by the backend server in job_metadata"
+                        logger.error(f"❌ {error_msg}")
+                        raise ValueError(error_msg)
+                    
                     if self.db_writer.write_metadata(metadata, source_id=backend_source_id):
                         metadata['written_to_db'] = True
                         metadata['source_id'] = backend_source_id
-                        logger.info("✅ Metadata written to database successfully")
+                        logger.info(f"✅ Metadata written to database successfully with source_id: {backend_source_id}")
                     else:
                         metadata['written_to_db'] = False
                         logger.warning("⚠️ Failed to write metadata to database")
@@ -124,6 +132,7 @@ class MetadataExtractor:
                     logger.error(f"❌ Database write failed: {e}")
                     metadata['written_to_db'] = False
                     metadata['db_error'] = str(e)
+                    raise  # Re-raise to fail the job if source_id is missing
             
             logger.info(f"✅ Metadata extraction completed: {len(files)} files analyzed")
             return metadata
