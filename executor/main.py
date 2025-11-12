@@ -22,6 +22,43 @@ from logger import initialize_logger, get_logger
 logger = get_logger(__name__)
 
 
+def get_source_id_from_environment():
+    """
+    Extract source_id from NUVYN_JOB_PAYLOAD environment variable.
+    This ensures the backend-provided source_id is used instead of generating a new UUID.
+    
+    Returns:
+        str: source_id from job_metadata, or None if not found
+    """
+    if "NUVYN_JOB_PAYLOAD" not in os.environ:
+        logger.debug("NUVYN_JOB_PAYLOAD environment variable not set")
+        return None
+    
+    try:
+        job_payload = json.loads(os.environ["NUVYN_JOB_PAYLOAD"])
+        
+        # First, try to get source_id from job_metadata (preferred)
+        if "job_metadata" in job_payload:
+            job_metadata = job_payload["job_metadata"]
+            if "source_id" in job_metadata:
+                source_id = job_metadata["source_id"]
+                logger.info(f"✅ Using source_id from job_metadata: {source_id}")
+                return source_id
+        
+        # Fallback to top-level source_id
+        if "source_id" in job_payload:
+            source_id = job_payload["source_id"]
+            logger.info(f"✅ Using source_id from top-level payload: {source_id}")
+            return source_id
+            
+    except json.JSONDecodeError as e:
+        logger.warning(f"⚠️ Failed to parse NUVYN_JOB_PAYLOAD as JSON: {e}")
+    except Exception as e:
+        logger.warning(f"⚠️ Error reading NUVYN_JOB_PAYLOAD: {e}")
+    
+    return None
+
+
 async def execute_job_by_id(job_id: str, config_manager: ConfigManager = None) -> dict:
     """Execute a specific job by ID"""
     logger.info(f"🚀 Starting job execution: {job_id}")
@@ -318,6 +355,14 @@ async def main():
             job_metadata = {}
             if db_writer:
                 job_metadata['db_writer'] = db_writer
+            
+            # Check for source_id in NUVYN_JOB_PAYLOAD environment variable (for Databricks Jobs)
+            # This takes priority over CLI arguments
+            env_source_id = get_source_id_from_environment()
+            if env_source_id:
+                if "source_id" not in job_metadata:
+                    job_metadata["source_id"] = env_source_id
+                    logger.info(f"✅ Overriding with source_id from NUVYN_JOB_PAYLOAD: {env_source_id}")
             
             result = await create_and_execute_job(
                 job_type="metadata_extraction",

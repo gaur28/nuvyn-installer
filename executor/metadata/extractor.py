@@ -3,6 +3,8 @@ Metadata Extractor for analyzing data structure and content
 """
 
 import asyncio
+import os
+import json
 from typing import Dict, Any, List, Optional
 from config import JobConfig, ConfigManager
 from datasource.factory import DataSourceFactory
@@ -18,6 +20,42 @@ class MetadataExtractor:
         self.config_manager = config_manager
         self.write_to_db = False
         self.db_writer = None
+    
+    def _get_source_id_from_environment(self):
+        """
+        Extract source_id from NUVYN_JOB_PAYLOAD environment variable.
+        This ensures the backend-provided source_id is used instead of generating a new UUID.
+        
+        Returns:
+            str: source_id from job_metadata, or None if not found
+        """
+        if "NUVYN_JOB_PAYLOAD" not in os.environ:
+            logger.debug("NUVYN_JOB_PAYLOAD environment variable not set")
+            return None
+        
+        try:
+            job_payload = json.loads(os.environ["NUVYN_JOB_PAYLOAD"])
+            
+            # First, try to get source_id from job_metadata (preferred)
+            if "job_metadata" in job_payload:
+                job_metadata = job_payload["job_metadata"]
+                if "source_id" in job_metadata:
+                    source_id = job_metadata["source_id"]
+                    logger.info(f"✅ Using source_id from job_metadata: {source_id}")
+                    return source_id
+            
+            # Fallback to top-level source_id
+            if "source_id" in job_payload:
+                source_id = job_payload["source_id"]
+                logger.info(f"✅ Using source_id from top-level payload: {source_id}")
+                return source_id
+                
+        except json.JSONDecodeError as e:
+            logger.warning(f"⚠️ Failed to parse NUVYN_JOB_PAYLOAD as JSON: {e}")
+        except Exception as e:
+            logger.warning(f"⚠️ Error reading NUVYN_JOB_PAYLOAD: {e}")
+        
+        return None
     
     async def extract_metadata(self, job_config: JobConfig) -> Dict[str, Any]:
         """Extract comprehensive metadata from data source"""
@@ -113,11 +151,20 @@ class MetadataExtractor:
                     logger.info("💾 Writing metadata to Databricks SQL...")
                     # Get backend-provided source_id - must be provided by backend
                     backend_source_id = None
+                    
+                    # Priority 1: Get source_id from job_metadata (from API or main.py)
                     if job_config.job_metadata:
                         backend_source_id = job_config.job_metadata.get('source_id')
+                        if backend_source_id:
+                            logger.info(f"✅ Using source_id from job_metadata: {backend_source_id}")
                     
+                    # Priority 2: Check NUVYN_JOB_PAYLOAD environment variable (for Databricks Jobs)
                     if not backend_source_id:
-                        error_msg = "source_id is required and must be provided by the backend server in job_metadata"
+                        backend_source_id = self._get_source_id_from_environment()
+                    
+                    # Validate source_id is not empty
+                    if not backend_source_id or not str(backend_source_id).strip():
+                        error_msg = "source_id is required and must be provided by the backend server in job_metadata or NUVYN_JOB_PAYLOAD environment variable"
                         logger.error(f"❌ {error_msg}")
                         raise ValueError(error_msg)
                     
