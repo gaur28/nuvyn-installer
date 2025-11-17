@@ -96,7 +96,7 @@ class ExecutorAPIServer:
             data = await request.json()
             
             # Validate required fields
-            required_fields = ['job_type', 'data_source_path', 'source_id']
+            required_fields = ['job_type', 'data_source_path', 'workflow_id']
             for field in required_fields:
                 if field not in data:
                     return json_response({
@@ -104,9 +104,11 @@ class ExecutorAPIServer:
                         "status": "error"
                     }, status=400)
             
-            # Prepare job_metadata with source_id from backend
+            # Prepare job_metadata with workflow_id and source_id from backend
             job_metadata = data.get('job_metadata', {})
-            if 'source_id' not in job_metadata:
+            if 'workflow_id' not in job_metadata:
+                job_metadata['workflow_id'] = data['workflow_id']
+            if 'source_id' in data and 'source_id' not in job_metadata:
                 job_metadata['source_id'] = data['source_id']
             
             # Create job

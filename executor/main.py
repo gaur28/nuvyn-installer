@@ -22,10 +22,47 @@ from logger import initialize_logger, get_logger
 logger = get_logger(__name__)
 
 
+def get_workflow_id_from_environment():
+    """
+    Extract workflow_id from NUVYN_JOB_PAYLOAD environment variable.
+    This ensures the backend-provided workflow_id is used as the primary identifier.
+    
+    Returns:
+        str: workflow_id from job_metadata, or None if not found
+    """
+    if "NUVYN_JOB_PAYLOAD" not in os.environ:
+        logger.debug("NUVYN_JOB_PAYLOAD environment variable not set")
+        return None
+    
+    try:
+        job_payload = json.loads(os.environ["NUVYN_JOB_PAYLOAD"])
+        
+        # First, try to get workflow_id from job_metadata (preferred)
+        if "job_metadata" in job_payload:
+            job_metadata = job_payload["job_metadata"]
+            if "workflow_id" in job_metadata:
+                workflow_id = job_metadata["workflow_id"]
+                logger.info(f"✅ Using workflow_id from job_metadata: {workflow_id}")
+                return workflow_id
+        
+        # Fallback to top-level workflow_id
+        if "workflow_id" in job_payload:
+            workflow_id = job_payload["workflow_id"]
+            logger.info(f"✅ Using workflow_id from top-level payload: {workflow_id}")
+            return workflow_id
+            
+    except json.JSONDecodeError as e:
+        logger.warning(f"⚠️ Failed to parse NUVYN_JOB_PAYLOAD as JSON: {e}")
+    except Exception as e:
+        logger.warning(f"⚠️ Error reading NUVYN_JOB_PAYLOAD: {e}")
+    
+    return None
+
+
 def get_source_id_from_environment():
     """
     Extract source_id from NUVYN_JOB_PAYLOAD environment variable.
-    This ensures the backend-provided source_id is used instead of generating a new UUID.
+    This is used for filtering purposes.
     
     Returns:
         str: source_id from job_metadata, or None if not found
@@ -356,13 +393,20 @@ async def main():
             if db_writer:
                 job_metadata['db_writer'] = db_writer
             
-            # Check for source_id in NUVYN_JOB_PAYLOAD environment variable (for Databricks Jobs)
+            # Check for workflow_id and source_id in NUVYN_JOB_PAYLOAD environment variable (for Databricks Jobs)
             # This takes priority over CLI arguments
+            env_workflow_id = get_workflow_id_from_environment()
             env_source_id = get_source_id_from_environment()
+            
+            if env_workflow_id:
+                if "workflow_id" not in job_metadata:
+                    job_metadata["workflow_id"] = env_workflow_id
+                    logger.info(f"✅ Using workflow_id from NUVYN_JOB_PAYLOAD: {env_workflow_id}")
+            
             if env_source_id:
                 if "source_id" not in job_metadata:
                     job_metadata["source_id"] = env_source_id
-                    logger.info(f"✅ Overriding with source_id from NUVYN_JOB_PAYLOAD: {env_source_id}")
+                    logger.info(f"✅ Using source_id from NUVYN_JOB_PAYLOAD: {env_source_id}")
             
             result = await create_and_execute_job(
                 job_type="metadata_extraction",

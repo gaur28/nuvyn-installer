@@ -21,10 +21,46 @@ class MetadataExtractor:
         self.write_to_db = False
         self.db_writer = None
     
+    def _get_workflow_id_from_environment(self):
+        """
+        Extract workflow_id from NUVYN_JOB_PAYLOAD environment variable.
+        This ensures the backend-provided workflow_id is used as the primary identifier.
+        
+        Returns:
+            str: workflow_id from job_metadata, or None if not found
+        """
+        if "NUVYN_JOB_PAYLOAD" not in os.environ:
+            logger.debug("NUVYN_JOB_PAYLOAD environment variable not set")
+            return None
+        
+        try:
+            job_payload = json.loads(os.environ["NUVYN_JOB_PAYLOAD"])
+            
+            # First, try to get workflow_id from job_metadata (preferred)
+            if "job_metadata" in job_payload:
+                job_metadata = job_payload["job_metadata"]
+                if "workflow_id" in job_metadata:
+                    workflow_id = job_metadata["workflow_id"]
+                    logger.info(f"✅ Using workflow_id from job_metadata: {workflow_id}")
+                    return workflow_id
+            
+            # Fallback to top-level workflow_id
+            if "workflow_id" in job_payload:
+                workflow_id = job_payload["workflow_id"]
+                logger.info(f"✅ Using workflow_id from top-level payload: {workflow_id}")
+                return workflow_id
+                
+        except json.JSONDecodeError as e:
+            logger.warning(f"⚠️ Failed to parse NUVYN_JOB_PAYLOAD as JSON: {e}")
+        except Exception as e:
+            logger.warning(f"⚠️ Error reading NUVYN_JOB_PAYLOAD: {e}")
+        
+        return None
+    
     def _get_source_id_from_environment(self):
         """
         Extract source_id from NUVYN_JOB_PAYLOAD environment variable.
-        This ensures the backend-provided source_id is used instead of generating a new UUID.
+        This is used for filtering purposes.
         
         Returns:
             str: source_id from job_metadata, or None if not found
@@ -149,29 +185,38 @@ class MetadataExtractor:
             if self.write_to_db and self.db_writer:
                 try:
                     logger.info("💾 Writing metadata to Databricks SQL...")
-                    # Get backend-provided source_id - must be provided by backend
-                    backend_source_id = None
                     
-                    # Priority 1: Get source_id from job_metadata (from API or main.py)
+                    # Get backend-provided workflow_id (primary identifier) - must be provided by backend
+                    workflow_id = None
+                    source_id = None
+                    
+                    # Priority 1: Get workflow_id and source_id from job_metadata (from API or main.py)
                     if job_config.job_metadata:
-                        backend_source_id = job_config.job_metadata.get('source_id')
-                        if backend_source_id:
-                            logger.info(f"✅ Using source_id from job_metadata: {backend_source_id}")
+                        workflow_id = job_config.job_metadata.get('workflow_id')
+                        source_id = job_config.job_metadata.get('source_id')
+                        if workflow_id:
+                            logger.info(f"✅ Using workflow_id from job_metadata: {workflow_id}")
+                        if source_id:
+                            logger.info(f"✅ Using source_id from job_metadata: {source_id}")
                     
                     # Priority 2: Check NUVYN_JOB_PAYLOAD environment variable (for Databricks Jobs)
-                    if not backend_source_id:
-                        backend_source_id = self._get_source_id_from_environment()
+                    if not workflow_id:
+                        workflow_id = self._get_workflow_id_from_environment()
+                    if not source_id:
+                        source_id = self._get_source_id_from_environment()
                     
-                    # Validate source_id is not empty
-                    if not backend_source_id or not str(backend_source_id).strip():
-                        error_msg = "source_id is required and must be provided by the backend server in job_metadata or NUVYN_JOB_PAYLOAD environment variable"
+                    # Validate workflow_id is not empty (required)
+                    if not workflow_id or not str(workflow_id).strip():
+                        error_msg = "workflow_id is required and must be provided by the backend server in job_metadata or NUVYN_JOB_PAYLOAD environment variable"
                         logger.error(f"❌ {error_msg}")
                         raise ValueError(error_msg)
                     
-                    if self.db_writer.write_metadata(metadata, source_id=backend_source_id):
+                    if self.db_writer.write_metadata(metadata, workflow_id=workflow_id, source_id=source_id):
                         metadata['written_to_db'] = True
-                        metadata['source_id'] = backend_source_id
-                        logger.info(f"✅ Metadata written to database successfully with source_id: {backend_source_id}")
+                        metadata['workflow_id'] = workflow_id
+                        if source_id:
+                            metadata['source_id'] = source_id
+                        logger.info(f"✅ Metadata written to database successfully with workflow_id: {workflow_id}, source_id: {source_id}")
                     else:
                         metadata['written_to_db'] = False
                         logger.warning("⚠️ Failed to write metadata to database")
@@ -179,7 +224,7 @@ class MetadataExtractor:
                     logger.error(f"❌ Database write failed: {e}")
                     metadata['written_to_db'] = False
                     metadata['db_error'] = str(e)
-                    raise  # Re-raise to fail the job if source_id is missing
+                    raise  # Re-raise to fail the job if workflow_id is missing
             
             logger.info(f"✅ Metadata extraction completed: {len(files)} files analyzed")
             return metadata

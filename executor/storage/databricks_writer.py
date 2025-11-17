@@ -2,7 +2,7 @@
 Databricks SQL Writer for storing metadata in _executor_metadata schema
 """
 
-from typing import Dict, Any, List, Optional
+-from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 from databricks import sql
 from logger import get_logger
@@ -67,10 +67,11 @@ class DatabricksWriter:
             # Switch to the schema
             cursor.execute(f"USE SCHEMA {self.schema_name}")
             
-            # Create sources table (id is auto-increment PK, source_id is backend-provided, non-unique)
+            # Create sources table (id is auto-increment PK, workflow_id is primary identifier, source_id for filtering)
             cursor.execute(f"""
                 CREATE TABLE IF NOT EXISTS {self.schema_name}.sources (
                     id BIGINT GENERATED ALWAYS AS IDENTITY,
+                    workflow_id STRING,
                     source_id STRING,
                     source_path STRING,
                     source_type STRING,
@@ -85,6 +86,7 @@ class DatabricksWriter:
             cursor.execute(f"""
                 CREATE TABLE IF NOT EXISTS {self.schema_name}.tables (
                     id BIGINT GENERATED ALWAYS AS IDENTITY,
+                    workflow_id STRING,
                     source_id STRING,
                     table_name STRING,
                     file_path STRING,
@@ -100,6 +102,7 @@ class DatabricksWriter:
             cursor.execute(f"""
                 CREATE TABLE IF NOT EXISTS {self.schema_name}.columns (
                     id BIGINT GENERATED ALWAYS AS IDENTITY,
+                    workflow_id STRING,
                     source_id STRING,
                     table_name STRING,
                     column_name STRING,
@@ -117,6 +120,7 @@ class DatabricksWriter:
                     id BIGINT GENERATED ALWAYS AS IDENTITY,
                     run_id STRING,
                     executor_version STRING,
+                    workflow_id STRING,
                     source_id STRING,
                     run_mode STRING,
                     status STRING,
@@ -148,47 +152,52 @@ class DatabricksWriter:
             logger.error(f"❌ Failed to create schema and tables: {e}")
             return False
     
-    def write_metadata(self, metadata: Dict[str, Any], source_id: str = None) -> bool:
+    def write_metadata(self, metadata: Dict[str, Any], workflow_id: str = None, source_id: str = None) -> bool:
         """Write extracted metadata to Databricks SQL tables
         
         Args:
             metadata: Metadata dict
-            source_id: Required backend-provided source_id (non-unique). Must be provided by backend.
+            workflow_id: Required backend-provided workflow_id (primary identifier). Must be provided by backend.
+            source_id: Optional source_id for filtering purposes.
         """
         try:
             logger.info("💾 Writing metadata to Databricks SQL...")
             
-            # source_id must be provided by backend - do not auto-generate
-            if not source_id:
-                error_msg = "source_id is required and must be provided by the backend server"
+            # workflow_id must be provided by backend - do not auto-generate
+            if not workflow_id:
+                error_msg = "workflow_id is required and must be provided by the backend server"
                 logger.error(f"❌ {error_msg}")
                 raise ValueError(error_msg)
             
-            logger.info(f"Using backend-provided source_id: {source_id}")
+            logger.info(f"Using backend-provided workflow_id: {workflow_id}")
+            if source_id:
+                logger.info(f"Using source_id for filtering: {source_id}")
             
             # Write to sources table
-            self._write_source(source_id, metadata)
+            self._write_source(workflow_id, source_id, metadata)
             
             # Write to tables table
             for file_info in metadata.get('files', []):
-                self._write_table(source_id, file_info)
+                self._write_table(workflow_id, source_id, file_info)
                 
                 # Write to columns table
                 if 'columns' in file_info:
                     for column in file_info['columns']:
-                        self._write_column(source_id, file_info['name'], column)
+                        self._write_column(workflow_id, source_id, file_info['name'], column)
             
-            # Store source_id in metadata for reference
-            metadata['source_id'] = source_id
+            # Store workflow_id and source_id in metadata for reference
+            metadata['workflow_id'] = workflow_id
+            if source_id:
+                metadata['source_id'] = source_id
             
-            logger.info(f"✅ Metadata written successfully (source_id: {source_id})")
+            logger.info(f"✅ Metadata written successfully (workflow_id: {workflow_id}, source_id: {source_id})")
             return True
             
         except Exception as e:
             logger.error(f"❌ Failed to write metadata: {e}")
             return False
     
-    def _write_source(self, source_id: str, metadata: Dict[str, Any]):
+    def _write_source(self, workflow_id: str, source_id: str, metadata: Dict[str, Any]):
         """Write to sources table"""
         try:
             cursor = self.connection.cursor()
@@ -198,10 +207,11 @@ class DatabricksWriter:
             
             cursor.execute(f"""
                 INSERT INTO hive_metastore.{self.schema_name}.sources
-                (source_id, source_path, source_type, extraction_timestamp, files_found, total_size_bytes)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (workflow_id, source_id, source_path, source_type, extraction_timestamp, files_found, total_size_bytes)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (
-                source_id,
+                workflow_id,
+                source_id or None,  # source_id is optional for filtering
                 metadata.get('source_path', ''),
                 metadata.get('source_type', ''),
                 extraction_timestamp,
@@ -210,23 +220,24 @@ class DatabricksWriter:
             ))
             
             cursor.close()
-            logger.info(f"✅ Source metadata written: {source_id}")
+            logger.info(f"✅ Source metadata written: workflow_id={workflow_id}, source_id={source_id}")
             
         except Exception as e:
             logger.error(f"❌ Failed to write source metadata: {e}")
             raise
     
-    def _write_table(self, source_id: str, file_info: Dict[str, Any]):
+    def _write_table(self, workflow_id: str, source_id: str, file_info: Dict[str, Any]):
         """Write to tables table"""
         try:
             cursor = self.connection.cursor()
             
             cursor.execute(f"""
                 INSERT INTO hive_metastore.{self.schema_name}.tables
-                (source_id, table_name, file_path, file_type, row_count, column_count, size_bytes)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (workflow_id, source_id, table_name, file_path, file_type, row_count, column_count, size_bytes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                source_id,
+                workflow_id,
+                source_id or None,  # source_id is optional for filtering
                 file_info.get('name', ''),
                 file_info.get('path', ''),
                 file_info.get('file_type', ''),
@@ -242,7 +253,7 @@ class DatabricksWriter:
             logger.error(f"❌ Failed to write table metadata: {e}")
             raise
     
-    def _write_column(self, source_id: str, table_name: str, column: Dict[str, Any]):
+    def _write_column(self, workflow_id: str, source_id: str, table_name: str, column: Dict[str, Any]):
         """Write to columns table"""
         try:
             cursor = self.connection.cursor()
@@ -252,10 +263,11 @@ class DatabricksWriter:
             
             cursor.execute(f"""
                 INSERT INTO hive_metastore.{self.schema_name}.columns
-                (source_id, table_name, column_name, data_type, position, is_nullable, sample_values)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (workflow_id, source_id, table_name, column_name, data_type, position, is_nullable, sample_values)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                source_id,
+                workflow_id,
+                source_id or None,  # source_id is optional for filtering
                 table_name,
                 column.get('column_name', ''),
                 column.get('data_type', ''),
@@ -271,16 +283,35 @@ class DatabricksWriter:
             logger.error(f"❌ Failed to write column metadata: {e}")
             raise
     
-    def query_metadata(self, source_id: str = None) -> Dict[str, Any]:
-        """Query metadata from Databricks SQL"""
+    def query_metadata(self, workflow_id: str = None, source_id: str = None) -> Dict[str, Any]:
+        """Query metadata from Databricks SQL
+        
+        Args:
+            workflow_id: Primary identifier for querying metadata (required if source_id not provided)
+            source_id: Optional filter for source_id
+        """
         try:
             cursor = self.connection.cursor()
             
-            if source_id:
-                # Query specific source
+            if workflow_id:
+                # Query by workflow_id (primary identifier)
+                if source_id:
+                    # Filter by both workflow_id and source_id
+                    cursor.execute(f"""
+                        SELECT * FROM hive_metastore.{self.schema_name}.sources
+                        WHERE workflow_id = ? AND source_id = ?
+                    """, (workflow_id, source_id))
+                else:
+                    cursor.execute(f"""
+                        SELECT * FROM hive_metastore.{self.schema_name}.sources
+                        WHERE workflow_id = ?
+                    """, (workflow_id,))
+            elif source_id:
+                # Query by source_id (for filtering)
                 cursor.execute(f"""
                     SELECT * FROM hive_metastore.{self.schema_name}.sources
                     WHERE source_id = ?
+                    ORDER BY extraction_timestamp DESC
                 """, (source_id,))
             else:
                 # Query all sources
