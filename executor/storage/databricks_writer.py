@@ -2,7 +2,7 @@
 Databricks SQL Writer for storing metadata in _executor_metadata schema
 """
 
--from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 from databricks import sql
 from logger import get_logger
