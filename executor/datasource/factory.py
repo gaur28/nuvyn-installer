@@ -3,11 +3,11 @@ Data source factory for creating appropriate connectors
 """
 
 from typing import Dict, Any, Optional
-from datasource.base import DataSourceBase
-from datasource.azure_blob import AzureBlobDataSource
-from datasource.aws_s3 import AWSS3DataSource
-from datasource.database import DatabaseDataSource
-from logger import get_logger
+from executor.datasource.base import DataSourceBase
+from executor.datasource.azure_blob import AzureBlobDataSource
+from executor.datasource.aws_s3 import AWSS3DataSource
+from executor.datasource.database import DatabaseDataSource
+from executor.logger import get_logger
 
 logger = get_logger(__name__)
 

@@ -8,8 +8,8 @@ import sqlalchemy
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
-from datasource.base import DataSourceBase
-from logger import get_logger
+from executor.datasource.base import DataSourceBase
+from executor.logger import get_logger
 
 logger = get_logger(__name__)
 

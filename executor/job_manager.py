@@ -10,8 +10,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 
-from config import JobConfig, JobType, JobStatus, ConfigManager
-from logger import get_logger
+from executor.config import JobConfig, JobType, JobStatus, ConfigManager
+from executor.logger import get_logger
 
 logger = get_logger(__name__)
 

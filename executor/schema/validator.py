@@ -7,8 +7,8 @@ import asyncio
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 
-from config import JobConfig, ConfigManager
-from logger import get_logger
+from executor.config import JobConfig, ConfigManager
+from executor.logger import get_logger
 
 logger = get_logger(__name__)
 

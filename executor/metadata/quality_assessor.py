@@ -4,8 +4,8 @@ Quality Assessor for evaluating data quality
 
 import asyncio
 from typing import Dict, Any, List
-from config import JobConfig, ConfigManager
-from logger import get_logger
+from executor.config import JobConfig, ConfigManager
+from executor.logger import get_logger
 
 logger = get_logger(__name__)
 

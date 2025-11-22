@@ -5,8 +5,8 @@ API Client for transmitting data to backend
 import asyncio
 import aiohttp
 from typing import Dict, Any, Optional
-from config import JobConfig, ConfigManager
-from logger import get_logger
+from executor.config import JobConfig, ConfigManager
+from executor.logger import get_logger
 
 logger = get_logger(__name__)
 

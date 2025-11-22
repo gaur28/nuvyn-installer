@@ -18,9 +18,9 @@ from aiohttp import web, web_request
 from aiohttp.web import Request, Response, json_response
 import aiohttp_cors
 
-from config import ConfigManager, JobType
-from job_manager import JobManager
-from logger import initialize_logger, get_logger
+from executor.config import ConfigManager, JobType
+from executor.job_manager import JobManager
+from executor.logger import initialize_logger, get_logger
 
 logger = get_logger(__name__)
 

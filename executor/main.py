@@ -15,9 +15,9 @@ from datetime import datetime, timezone
 # Add executor directory to path
 sys.path.insert(0, os.path.dirname(__file__))
 
-from config import ConfigManager, JobType
-from job_manager import JobManager
-from logger import initialize_logger, get_logger
+from executor.config import ConfigManager, JobType
+from executor.job_manager import JobManager
+from executor.logger import initialize_logger, get_logger
 
 logger = get_logger(__name__)
 
@@ -416,7 +416,7 @@ async def main():
         db_writer = None
         if write_to_db:
             if db_server_hostname and db_http_path and db_access_token:
-                from storage.databricks_writer import DatabricksWriter
+                from executor.storage.databricks_writer import DatabricksWriter
                 db_writer = DatabricksWriter(db_server_hostname, db_http_path, db_access_token)
                 if db_writer.connect():
                     db_writer.create_schema_and_tables()

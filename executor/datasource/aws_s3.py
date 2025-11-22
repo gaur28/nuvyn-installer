@@ -7,8 +7,8 @@ from typing import List, Dict, Any, Optional
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
 
-from datasource.base import DataSourceBase
-from logger import get_logger
+from executor.datasource.base import DataSourceBase
+from executor.logger import get_logger
 
 logger = get_logger(__name__)
 
