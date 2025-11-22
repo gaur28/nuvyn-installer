@@ -94,7 +94,17 @@ class MetadataExtractor:
         return None
     
     async def extract_metadata(self, job_config: JobConfig) -> Dict[str, Any]:
-        """Extract comprehensive metadata from data source"""
+        """Extract comprehensive metadata from data source(s)
+        
+        Supports both single source (backward compatible) and multiple sources.
+        If sources list is provided, processes each source individually.
+        """
+        # Check if multiple sources are provided
+        if job_config.sources and len(job_config.sources) > 0:
+            logger.info(f"🔍 Extracting metadata from {len(job_config.sources)} sources")
+            return await self._extract_metadata_multiple_sources(job_config)
+        
+        # Single source processing (backward compatible)
         logger.info(f"🔍 Extracting metadata from: {job_config.data_source_path}")
         
         try:
@@ -236,6 +246,198 @@ class MetadataExtractor:
                 "error": str(e),
                 "extraction_status": "failed"
             }
+    
+    async def _extract_metadata_multiple_sources(self, job_config: JobConfig) -> Dict[str, Any]:
+        """Extract metadata from multiple sources individually
+        
+        Each source is processed separately with its own source_id,
+        but all share the same workflow_id.
+        """
+        logger.info(f"🔄 Processing {len(job_config.sources)} sources in batch")
+        
+        # Get workflow_id (shared across all sources)
+        workflow_id = None
+        if job_config.job_metadata:
+            workflow_id = job_config.job_metadata.get('workflow_id')
+        if not workflow_id:
+            workflow_id = self._get_workflow_id_from_environment()
+        
+        if not workflow_id or not str(workflow_id).strip():
+            error_msg = "workflow_id is required for multi-source extraction"
+            logger.error(f"❌ {error_msg}")
+            raise ValueError(error_msg)
+        
+        results = {
+            "workflow_id": workflow_id,
+            "total_sources": len(job_config.sources),
+            "sources_processed": 0,
+            "sources_failed": 0,
+            "sources": [],
+            "extraction_timestamp": asyncio.get_event_loop().time()
+        }
+        
+        # Process each source individually
+        for idx, source_config in enumerate(job_config.sources):
+            source_id = source_config.get('source_id', f"source_{idx + 1}")
+            data_source_path = source_config.get('data_source_path', '')
+            data_source_type = source_config.get('data_source_type', job_config.data_source_type or 'auto')
+            
+            if not data_source_path:
+                logger.warning(f"⚠️ Skipping source {idx + 1}: missing data_source_path")
+                results["sources_failed"] += 1
+                continue
+            
+            logger.info(f"📊 Processing source {idx + 1}/{len(job_config.sources)}: {source_id}")
+            logger.info(f"   Path: {data_source_path}")
+            
+            try:
+                # Create a temporary job config for this source
+                source_job_config = JobConfig(
+                    job_id=f"{job_config.job_id}_source_{idx + 1}",
+                    job_type=job_config.job_type,
+                    data_source_path=data_source_path,
+                    data_source_type=data_source_type,
+                    tenant_id=job_config.tenant_id,
+                    job_metadata={
+                        'workflow_id': workflow_id,
+                        'source_id': source_id
+                    }
+                )
+                
+                # Extract metadata for this source
+                source_metadata = await self._extract_single_source_metadata(source_job_config, workflow_id, source_id)
+                
+                # Store results
+                source_result = {
+                    "source_id": source_id,
+                    "source_path": data_source_path,
+                    "source_type": data_source_type,
+                    "status": "success",
+                    "metadata": source_metadata
+                }
+                results["sources"].append(source_result)
+                results["sources_processed"] += 1
+                
+                logger.info(f"✅ Source {source_id} processed successfully")
+                
+            except Exception as e:
+                logger.error(f"❌ Failed to process source {source_id}: {e}")
+                results["sources_failed"] += 1
+                results["sources"].append({
+                    "source_id": source_id,
+                    "source_path": data_source_path,
+                    "status": "failed",
+                    "error": str(e)
+                })
+        
+        logger.info(f"✅ Multi-source extraction completed: {results['sources_processed']} succeeded, {results['sources_failed']} failed")
+        return results
+    
+    async def _extract_single_source_metadata(self, job_config: JobConfig, workflow_id: str, source_id: str) -> Dict[str, Any]:
+        """Extract metadata from a single source (internal method)"""
+        try:
+            # Get credentials and create connector
+            credentials = self.config_manager.get_data_source_credentials(job_config.data_source_type)
+            connector = DataSourceFactory.auto_detect_connector(job_config.data_source_path, credentials)
+            
+            if not connector:
+                raise Exception(f"No suitable connector found for path: {job_config.data_source_path}")
+            
+            # Connect to data source
+            if hasattr(connector, 'can_handle') and 'blob.core.windows.net' in job_config.data_source_path:
+                if not await connector.connect(url_with_sas=job_config.data_source_path):
+                    raise Exception("Failed to connect to data source")
+            else:
+                if not await connector.connect():
+                    raise Exception("Failed to connect to data source")
+            
+            # Extract metadata
+            files = await connector.list_files(job_config.data_source_path)
+            
+            metadata = {
+                "source_path": job_config.data_source_path,
+                "source_type": connector.get_source_type(),
+                "extraction_timestamp": asyncio.get_event_loop().time(),
+                "files_found": len(files),
+                "files": [],
+                "total_size_bytes": 0,
+                "schema_info": {
+                    "tables": 0,
+                    "columns": 0,
+                    "data_types": {}
+                },
+                "quality_metrics": {
+                    "overall_score": 85,
+                    "completeness": 90,
+                    "accuracy": 85,
+                    "consistency": 80
+                }
+            }
+            
+            # Analyze each file
+            for file_path in files[:5]:  # Analyze first 5 files
+                try:
+                    if '?' in job_config.data_source_path and 'sig=' in job_config.data_source_path:
+                        full_file_path = job_config.data_source_path
+                    else:
+                        full_file_path = file_path
+                    
+                    file_size = await connector.get_file_size(full_file_path)
+                    sample_data = await connector.read_file_sample(full_file_path, max_bytes=1024*1024)
+                    
+                    file_type = self._detect_file_type(file_path)
+                    
+                    file_info = {
+                        "name": file_path.split('/')[-1],
+                        "path": file_path,
+                        "size_bytes": file_size,
+                        "sample_size": len(sample_data),
+                        "file_type": file_type
+                    }
+                    
+                    # Analyze CSV files for detailed metadata
+                    if file_type == "csv" and sample_data:
+                        csv_metadata = self._analyze_csv_data(sample_data, file_path.split('/')[-1])
+                        file_info.update(csv_metadata)
+                        
+                        if "columns" in csv_metadata:
+                            metadata["schema_info"]["tables"] += 1
+                            metadata["schema_info"]["columns"] += len(csv_metadata["columns"])
+                            for col in csv_metadata["columns"]:
+                                col_type = col.get("data_type", "unknown")
+                                metadata["schema_info"]["data_types"][col_type] = metadata["schema_info"]["data_types"].get(col_type, 0) + 1
+                    
+                    metadata["files"].append(file_info)
+                    metadata["total_size_bytes"] += file_size
+                    
+                except Exception as e:
+                    logger.warning(f"Failed to analyze file {file_path}: {e}")
+            
+            await connector.disconnect()
+            
+            # Write to database if enabled
+            if self.write_to_db and self.db_writer:
+                try:
+                    logger.info(f"💾 Writing metadata for source {source_id} to Databricks SQL...")
+                    
+                    if self.db_writer.write_metadata(metadata, workflow_id=workflow_id, source_id=source_id):
+                        metadata['written_to_db'] = True
+                        metadata['workflow_id'] = workflow_id
+                        metadata['source_id'] = source_id
+                        logger.info(f"✅ Metadata written for source {source_id}")
+                    else:
+                        metadata['written_to_db'] = False
+                        logger.warning(f"⚠️ Failed to write metadata for source {source_id}")
+                except Exception as e:
+                    logger.error(f"❌ Database write failed for source {source_id}: {e}")
+                    metadata['written_to_db'] = False
+                    metadata['db_error'] = str(e)
+            
+            return metadata
+            
+        except Exception as e:
+            logger.error(f"❌ Metadata extraction failed for source {source_id}: {e}")
+            raise
     
     def _detect_file_type(self, file_path: str) -> str:
         """Detect file type from path"""

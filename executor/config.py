@@ -6,8 +6,8 @@ Handles job configuration, environment variables, and settings
 import os
 import json
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional
-from dataclasses import dataclass, asdict
+from typing import Dict, Any, Optional, List
+from dataclasses import dataclass, asdict, field
 from enum import Enum
 
 
@@ -35,7 +35,7 @@ class JobConfig:
     """Configuration for a specific job"""
     job_id: str
     job_type: JobType
-    data_source_path: str
+    data_source_path: str = ""  # Single source path (for backward compatibility)
     data_source_type: str = "auto"
     tenant_id: str = "default"
     api_endpoint: str = ""
@@ -45,12 +45,15 @@ class JobConfig:
     created_at: datetime = None
     created_by: str = "system"
     job_metadata: Dict[str, Any] = None
+    sources: List[Dict[str, Any]] = field(default_factory=list)  # Multiple sources support
     
     def __post_init__(self):
         if self.created_at is None:
             self.created_at = datetime.now(timezone.utc)
         if self.job_metadata is None:
             self.job_metadata = {}
+        if self.sources is None:
+            self.sources = []
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization"""

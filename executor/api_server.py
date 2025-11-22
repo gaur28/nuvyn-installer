@@ -91,34 +91,83 @@ class ExecutorAPIServer:
         })
     
     async def create_job(self, request: Request) -> Response:
-        """Create a new job"""
+        """Create a new job
+        
+        Supports both single source and multiple sources:
+        - Single source: Provide 'data_source_path' and 'workflow_id'
+        - Multiple sources: Provide 'sources' array and 'workflow_id'
+        """
         try:
             data = await request.json()
             
             # Validate required fields
-            required_fields = ['job_type', 'data_source_path', 'workflow_id']
-            for field in required_fields:
-                if field not in data:
+            if 'workflow_id' not in data:
+                return json_response({
+                    "error": "Missing required field: workflow_id",
+                    "status": "error"
+                }, status=400)
+            
+            # Check if multiple sources are provided
+            sources = data.get('sources', [])
+            if sources and len(sources) > 0:
+                # Multi-source mode
+                if 'job_type' not in data:
                     return json_response({
-                        "error": f"Missing required field: {field}",
+                        "error": "Missing required field: job_type",
                         "status": "error"
                     }, status=400)
-            
-            # Prepare job_metadata with workflow_id and source_id from backend
-            job_metadata = data.get('job_metadata', {})
-            if 'workflow_id' not in job_metadata:
+                
+                # Validate each source has required fields
+                for idx, source in enumerate(sources):
+                    if 'data_source_path' not in source:
+                        return json_response({
+                            "error": f"Source {idx + 1} missing required field: data_source_path",
+                            "status": "error"
+                        }, status=400)
+                    if 'source_id' not in source:
+                        return json_response({
+                            "error": f"Source {idx + 1} missing required field: source_id",
+                            "status": "error"
+                        }, status=400)
+                
+                # Prepare job_metadata
+                job_metadata = data.get('job_metadata', {})
                 job_metadata['workflow_id'] = data['workflow_id']
-            if 'source_id' in data and 'source_id' not in job_metadata:
-                job_metadata['source_id'] = data['source_id']
-            
-            # Create job
-            job_id = await self.job_manager.create_job(
-                job_type=JobType(data['job_type']),
-                data_source_path=data['data_source_path'],
-                data_source_type=data.get('data_source_type', 'auto'),
-                tenant_id=data.get('tenant_id', 'default'),
-                job_metadata=job_metadata
-            )
+                
+                # Create job with multiple sources
+                job_id = await self.job_manager.create_job(
+                    job_type=JobType(data['job_type']),
+                    data_source_path="",  # Not used in multi-source mode
+                    data_source_type=data.get('data_source_type', 'auto'),
+                    tenant_id=data.get('tenant_id', 'default'),
+                    job_metadata=job_metadata,
+                    sources=sources
+                )
+            else:
+                # Single source mode (backward compatible)
+                required_fields = ['job_type', 'data_source_path']
+                for field in required_fields:
+                    if field not in data:
+                        return json_response({
+                            "error": f"Missing required field: {field}",
+                            "status": "error"
+                        }, status=400)
+                
+                # Prepare job_metadata with workflow_id and source_id from backend
+                job_metadata = data.get('job_metadata', {})
+                if 'workflow_id' not in job_metadata:
+                    job_metadata['workflow_id'] = data['workflow_id']
+                if 'source_id' in data and 'source_id' not in job_metadata:
+                    job_metadata['source_id'] = data['source_id']
+                
+                # Create job
+                job_id = await self.job_manager.create_job(
+                    job_type=JobType(data['job_type']),
+                    data_source_path=data['data_source_path'],
+                    data_source_type=data.get('data_source_type', 'auto'),
+                    tenant_id=data.get('tenant_id', 'default'),
+                    job_metadata=job_metadata
+                )
             
             return json_response({
                 "job_id": job_id,

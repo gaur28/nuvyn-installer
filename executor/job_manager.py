@@ -44,11 +44,21 @@ class JobManager:
     
     async def create_job(self, 
                         job_type: JobType,
-                        data_source_path: str,
+                        data_source_path: str = "",
                         data_source_type: str = "auto",
                         tenant_id: str = "default",
-                        job_metadata: Dict[str, Any] = None) -> str:
-        """Create a new job and return job ID"""
+                        job_metadata: Dict[str, Any] = None,
+                        sources: List[Dict[str, Any]] = None) -> str:
+        """Create a new job and return job ID
+        
+        Args:
+            job_type: Type of job to execute
+            data_source_path: Single source path (for backward compatibility)
+            data_source_type: Type of data source
+            tenant_id: Tenant identifier
+            job_metadata: Additional job metadata
+            sources: List of sources for multi-source processing
+        """
         job_id = f"job_{uuid.uuid4().hex[:12]}"
         
         job_config = JobConfig(
@@ -57,7 +67,8 @@ class JobManager:
             data_source_path=data_source_path,
             data_source_type=data_source_type,
             tenant_id=tenant_id,
-            job_metadata=job_metadata or {}
+            job_metadata=job_metadata or {},
+            sources=sources or []
         )
         
         # Save job configuration

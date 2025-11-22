@@ -96,6 +96,42 @@ def get_source_id_from_environment():
     return None
 
 
+def get_sources_from_environment():
+    """
+    Extract sources list from NUVYN_JOB_PAYLOAD environment variable.
+    Used for multi-source processing.
+    
+    Returns:
+        List[Dict[str, Any]]: List of source configurations, or None if not found
+    """
+    if "NUVYN_JOB_PAYLOAD" not in os.environ:
+        logger.debug("NUVYN_JOB_PAYLOAD environment variable not set")
+        return None
+    
+    try:
+        job_payload = json.loads(os.environ["NUVYN_JOB_PAYLOAD"])
+        
+        # Check for sources array
+        if "sources" in job_payload and isinstance(job_payload["sources"], list):
+            sources = job_payload["sources"]
+            logger.info(f"✅ Found {len(sources)} sources in NUVYN_JOB_PAYLOAD")
+            return sources
+        
+        # Also check in job_metadata
+        if "job_metadata" in job_payload and "sources" in job_payload["job_metadata"]:
+            sources = job_payload["job_metadata"]["sources"]
+            if isinstance(sources, list):
+                logger.info(f"✅ Found {len(sources)} sources in job_metadata")
+                return sources
+            
+    except json.JSONDecodeError as e:
+        logger.warning(f"⚠️ Failed to parse NUVYN_JOB_PAYLOAD as JSON: {e}")
+    except Exception as e:
+        logger.warning(f"⚠️ Error reading NUVYN_JOB_PAYLOAD: {e}")
+    
+    return None
+
+
 async def execute_job_by_id(job_id: str, config_manager: ConfigManager = None) -> dict:
     """Execute a specific job by ID"""
     logger.info(f"🚀 Starting job execution: {job_id}")
@@ -138,13 +174,22 @@ async def execute_job_by_id(job_id: str, config_manager: ConfigManager = None) -
 
 
 async def create_and_execute_job(job_type: str, 
-                                data_source_path: str,
+                                data_source_path: str = "",
                                 data_source_type: str = "auto",
                                 tenant_id: str = "default",
                                 config_manager: ConfigManager = None,
-                                job_metadata: Dict[str, Any] = None) -> dict:
-    """Create a new job and execute it"""
-    logger.info(f"🆕 Creating new job: {job_type} for {data_source_path}")
+                                job_metadata: Dict[str, Any] = None,
+                                sources: List[Dict[str, Any]] = None) -> dict:
+    """Create a new job and execute it
+    
+    Supports both single source and multiple sources:
+    - Single source: Provide data_source_path
+    - Multiple sources: Provide sources list
+    """
+    if sources and len(sources) > 0:
+        logger.info(f"🆕 Creating new job: {job_type} for {len(sources)} sources")
+    else:
+        logger.info(f"🆕 Creating new job: {job_type} for {data_source_path}")
     
     # Create config manager if not provided
     if config_manager is None:
@@ -160,7 +205,8 @@ async def create_and_execute_job(job_type: str,
             data_source_path=data_source_path,
             data_source_type=data_source_type,
             tenant_id=tenant_id,
-            job_metadata=job_metadata or {}
+            job_metadata=job_metadata or {},
+            sources=sources or []
         )
         
         logger.info(f"📋 Job created: {job_id}")
@@ -384,19 +430,15 @@ async def main():
         
         # Execute based on job type
         if job_type == "metadata_extraction":
-            if not data_source_path:
-                logger.error("❌ Error: Data source path required for metadata extraction")
-                sys.exit(1)
-            
             # Pass db_writer in job_metadata if available
             job_metadata = {}
             if db_writer:
                 job_metadata['db_writer'] = db_writer
             
-            # Check for workflow_id and source_id in NUVYN_JOB_PAYLOAD environment variable (for Databricks Jobs)
-            # This takes priority over CLI arguments
+            # Check for workflow_id, source_id, and sources in NUVYN_JOB_PAYLOAD environment variable
             env_workflow_id = get_workflow_id_from_environment()
             env_source_id = get_source_id_from_environment()
+            env_sources = get_sources_from_environment()
             
             if env_workflow_id:
                 if "workflow_id" not in job_metadata:
@@ -408,14 +450,41 @@ async def main():
                     job_metadata["source_id"] = env_source_id
                     logger.info(f"✅ Using source_id from NUVYN_JOB_PAYLOAD: {env_source_id}")
             
-            result = await create_and_execute_job(
-                job_type="metadata_extraction",
-                data_source_path=data_source_path,
-                data_source_type=data_source_type,
-                tenant_id=tenant_id,
-                config_manager=config_manager,
-                job_metadata=job_metadata
-            )
+            # Check if multiple sources are provided
+            sources = env_sources if env_sources else []
+            
+            if sources and len(sources) > 0:
+                # Multi-source mode
+                logger.info(f"🔄 Multi-source mode: Processing {len(sources)} sources")
+                
+                # Validate workflow_id is present
+                if not env_workflow_id:
+                    logger.error("❌ Error: workflow_id is required for multi-source extraction")
+                    sys.exit(1)
+                
+                result = await create_and_execute_job(
+                    job_type="metadata_extraction",
+                    data_source_path="",  # Not used in multi-source mode
+                    data_source_type=data_source_type,
+                    tenant_id=tenant_id,
+                    config_manager=config_manager,
+                    job_metadata=job_metadata,
+                    sources=sources
+                )
+            else:
+                # Single source mode (backward compatible)
+                if not data_source_path:
+                    logger.error("❌ Error: Data source path required for metadata extraction")
+                    sys.exit(1)
+                
+                result = await create_and_execute_job(
+                    job_type="metadata_extraction",
+                    data_source_path=data_source_path,
+                    data_source_type=data_source_type,
+                    tenant_id=tenant_id,
+                    config_manager=config_manager,
+                    job_metadata=job_metadata
+                )
             
         elif job_type == "schema_validation":
             result = await create_and_execute_job(
