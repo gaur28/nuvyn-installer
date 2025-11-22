@@ -52,7 +52,7 @@ setup(
     long_description=read_readme(),
     long_description_content_type="text/markdown",
     url="https://github.com/nuvyn-bldr/executor-script",
-    packages=find_packages(),
+    packages=find_packages(),  # Automatically finds both 'executor' and 'nuvyn_executor' packages
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
