@@ -9,7 +9,7 @@ import os
 import asyncio
 import argparse
 import json
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 
 # Add executor directory to path
@@ -96,7 +96,7 @@ def get_source_id_from_environment():
     return None
 
 
-def get_sources_from_environment():
+def get_sources_from_environment() -> Optional[List[Dict[str, Any]]]:
     """
     Extract sources list from NUVYN_JOB_PAYLOAD environment variable.
     Used for multi-source processing.
