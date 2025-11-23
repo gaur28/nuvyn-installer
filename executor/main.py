@@ -394,9 +394,23 @@ async def main():
             sys.exit(1)
         
         job_type = sys.argv[1]
-        data_source_path = sys.argv[2] if len(sys.argv) > 2 else None
-        data_source_type = sys.argv[3] if len(sys.argv) > 3 else "auto"
-        tenant_id = sys.argv[4] if len(sys.argv) > 4 else "default"
+        
+        # Check for sources in environment first (for multi-source mode)
+        env_sources = get_sources_from_environment()
+        
+        # Parse arguments - if sources are in environment, data_source_path is optional
+        if env_sources and len(env_sources) > 0:
+            # Multi-source mode: data_source_path not required
+            # Arguments can be: metadata_extraction <workflow_id> [--write-to-db]
+            # or: metadata_extraction --write-to-db (workflow_id from env)
+            data_source_path = sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else None
+            data_source_type = sys.argv[3] if len(sys.argv) > 3 and not sys.argv[3].startswith("--") else "auto"
+            tenant_id = sys.argv[4] if len(sys.argv) > 4 and not sys.argv[4].startswith("--") else "default"
+        else:
+            # Single source mode: data_source_path required
+            data_source_path = sys.argv[2] if len(sys.argv) > 2 else None
+            data_source_type = sys.argv[3] if len(sys.argv) > 3 else "auto"
+            tenant_id = sys.argv[4] if len(sys.argv) > 4 else "default"
         
         # Check for --write-to-db flag
         write_to_db = "--write-to-db" in sys.argv or os.getenv("EXECUTOR_WRITE_TO_DB", "false").lower() == "true"
@@ -407,7 +421,7 @@ async def main():
         db_access_token = os.getenv("DATABRICKS_ACCESS_TOKEN", "")
         
         logger.info(f"📋 Job Type: {job_type}")
-        logger.info(f"📁 Data Source: {data_source_path}")
+        logger.info(f"📁 Data Source: {data_source_path or 'N/A (multi-source mode)'}")
         logger.info(f"🔍 Source Type: {data_source_type}")
         logger.info(f"🏢 Tenant ID: {tenant_id}")
         logger.info(f"💾 Write to DB: {write_to_db}")
@@ -435,10 +449,10 @@ async def main():
             if db_writer:
                 job_metadata['db_writer'] = db_writer
             
-            # Check for workflow_id, source_id, and sources in NUVYN_JOB_PAYLOAD environment variable
+            # Check for workflow_id, source_id in NUVYN_JOB_PAYLOAD environment variable
+            # (sources already retrieved at the top of main() function)
             env_workflow_id = get_workflow_id_from_environment()
             env_source_id = get_source_id_from_environment()
-            env_sources = get_sources_from_environment()
             
             if env_workflow_id:
                 if "workflow_id" not in job_metadata:
@@ -450,7 +464,7 @@ async def main():
                     job_metadata["source_id"] = env_source_id
                     logger.info(f"✅ Using source_id from NUVYN_JOB_PAYLOAD: {env_source_id}")
             
-            # Check if multiple sources are provided
+            # Use sources already retrieved at the top of main() function
             sources = env_sources if env_sources else []
             
             if sources and len(sources) > 0:
