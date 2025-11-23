@@ -398,19 +398,62 @@ async def main():
         # Check for sources in environment first (for multi-source mode)
         env_sources = get_sources_from_environment()
         
+        # Filter out flags from positional arguments
+        positional_args = [arg for arg in sys.argv[2:] if not arg.startswith("--")]
+        
         # Parse arguments - if sources are in environment, data_source_path is optional
         if env_sources and len(env_sources) > 0:
             # Multi-source mode: data_source_path not required
             # Arguments can be: metadata_extraction <workflow_id> [--write-to-db]
             # or: metadata_extraction --write-to-db (workflow_id from env)
-            data_source_path = sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else None
-            data_source_type = sys.argv[3] if len(sys.argv) > 3 and not sys.argv[3].startswith("--") else "auto"
-            tenant_id = sys.argv[4] if len(sys.argv) > 4 and not sys.argv[4].startswith("--") else "default"
+            data_source_path = None  # Not used in multi-source mode
+            data_source_type = positional_args[0] if len(positional_args) > 0 else "auto"
+            tenant_id = positional_args[1] if len(positional_args) > 1 else "default"
         else:
             # Single source mode: data_source_path required
-            data_source_path = sys.argv[2] if len(sys.argv) > 2 else None
-            data_source_type = sys.argv[3] if len(sys.argv) > 3 else "auto"
-            tenant_id = sys.argv[4] if len(sys.argv) > 4 else "default"
+            # Try to intelligently parse arguments
+            # Expected format: <data_source_path> <data_source_type> <workflow_id> [tenant_id]
+            # But if data_source_path is missing, arguments might be: <data_source_type> <workflow_id>
+            
+            if len(positional_args) == 0:
+                data_source_path = None
+                data_source_type = "auto"
+                tenant_id = "default"
+            elif len(positional_args) == 1:
+                # Only one arg - could be path or type
+                # Check if it looks like a path/URL (contains :// or /)
+                arg = positional_args[0]
+                if "://" in arg or "/" in arg or arg.startswith("http"):
+                    data_source_path = arg
+                    data_source_type = "auto"
+                    tenant_id = "default"
+                else:
+                    # Probably data_source_type, missing path
+                    data_source_path = None
+                    data_source_type = arg
+                    tenant_id = "default"
+            elif len(positional_args) == 2:
+                # Two args - could be <path> <type> or <type> <workflow_id>
+                arg1, arg2 = positional_args[0], positional_args[1]
+                if "://" in arg1 or "/" in arg1 or arg1.startswith("http"):
+                    # First arg is path
+                    data_source_path = arg1
+                    data_source_type = arg2
+                    tenant_id = "default"
+                else:
+                    # First arg is probably type, missing path
+                    data_source_path = None
+                    data_source_type = arg1
+                    tenant_id = arg2  # This might be workflow_id, but we'll use it as tenant_id for now
+            else:
+                # Three or more args - standard format
+                data_source_path = positional_args[0] if positional_args[0] else None
+                data_source_type = positional_args[1] if len(positional_args) > 1 else "auto"
+                tenant_id = positional_args[2] if len(positional_args) > 2 else "default"
+            
+            # Handle empty string as None
+            if data_source_path == "":
+                data_source_path = None
         
         # Check for --write-to-db flag
         write_to_db = "--write-to-db" in sys.argv or os.getenv("EXECUTOR_WRITE_TO_DB", "false").lower() == "true"
@@ -421,7 +464,10 @@ async def main():
         db_access_token = os.getenv("DATABRICKS_ACCESS_TOKEN", "")
         
         logger.info(f"📋 Job Type: {job_type}")
-        logger.info(f"📁 Data Source: {data_source_path or 'N/A (multi-source mode)'}")
+        if env_sources and len(env_sources) > 0:
+            logger.info(f"📁 Data Source: N/A (multi-source mode: {len(env_sources)} sources)")
+        else:
+            logger.info(f"📁 Data Source: {data_source_path or 'NOT PROVIDED'}")
         logger.info(f"🔍 Source Type: {data_source_type}")
         logger.info(f"🏢 Tenant ID: {tenant_id}")
         logger.info(f"💾 Write to DB: {write_to_db}")
@@ -489,6 +535,8 @@ async def main():
                 # Single source mode (backward compatible)
                 if not data_source_path:
                     logger.error("❌ Error: Data source path required for metadata extraction")
+                    logger.error("   For single-source mode, provide: nuvyn-executor metadata_extraction <path> <type> <workflow_id> [--write-to-db]")
+                    logger.error("   For multi-source mode, include 'sources' array in NUVYN_JOB_PAYLOAD environment variable")
                     sys.exit(1)
                 
                 result = await create_and_execute_job(
